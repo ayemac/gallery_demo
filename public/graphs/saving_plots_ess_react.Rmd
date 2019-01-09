@@ -1,0 +1,192 @@
+---
+title: "saving_plots_ess_react"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(dplyr)
+library(highcharter)
+library(jsonlite)
+library(rio)
+library(stringr)
+#Import data
+outcome<-import("../data/outcomes.csv") 
+yrdata<-import("../data/demo_flat.rds")%>%select(-cntry)
+why<-plyr::join(outcome, yrdata, by = "Unique_ID")
+
+
+#Import Metadata
+metadata<- import("../data/ESS_Meta_standardized.xlsx", sheet = "Use")
+
+
+######Short list of variables to use -- continuous only
+many<- import("../data/ESS_Meta.xlsx", sheet = "variablesSmallSet")%>%filter(DataType == "10-point")
+list_of_vars<- many$var
+
+
+```
+
+##Constants
+
+```{r}
+##Assign Height
+height<-300
+
+##Background color of tooltip
+bgcolor <- "#ffffff"
+
+```
+
+
+ 
+```{r}
+for (nov in list_of_vars){
+  
+##Selects the data
+data<-select(why,nov,  year , cntry, pspwght,Unique_ID)
+
+##Filters out metadata
+meta<- metadata%>%filter(var == nov)
+
+##Frequency fix factor
+data$nocFctr<- factor(data[[nov]], levels=c("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))
+
+##Get Frequency Summary
+fqData<- data%>%dplyr::group_by(nocFctr)%>%summarise(n= n())
+
+##Fix up some colors for maximum value 
+fqData<-fqData %>% mutate(mode = if_else(n == max(fqData$n),"#68228B",  "#030303"))%>%filter(!is.na(nocFctr))
+
+
+freq <- hchart(fqData,
+               "column", 
+               name = "Frequency", 
+               colorByPoint = TRUE, 
+               hcaes(x = "nocFctr", y = "n"))%>%
+  hc_plotOptions(bar = list( dataLabels = list(enabled = TRUE, 
+                                               format = '{point.y}'), 
+                             enableMouseTracking = TRUE), 
+                 animation=TRUE) %>% 
+hc_yAxis(title = list(text =  ""))  %>%
+  hc_xAxis(title= list(text =paste0( "Distribution of ", meta$title , " (10-point scale)"))) %>%
+  hc_legend(enabled=FALSE)  %>%
+  hc_size(height=height)%>%
+  hc_add_theme(hc_theme_tufte())%>%
+  hc_colors(fqData$mode)%>%
+  hc_tooltip(crosshairs= list(enabled= TRUE,
+                              color=c("#f7f2e6")),
+             backgroundColor = bgcolor,
+             shared = TRUE,
+             borderWidth = 1,
+             headerFormat = paste0(meta$title, " Level:  {point.x}<br>"))%>%
+  hc_chart(backgroundColor = "transparent")
+
+
+jslns <- paste0('export default ', freq$x$hc_opts %>% 
+  toJSON(pretty = TRUE, auto_unbox = TRUE, force = TRUE, null = "null"))%>% 
+  str_split("\n") %>% 
+  head(1) %>%
+  unlist() %>% 
+  str_replace('"', "") %>% 
+  str_replace("\":", ":")
+
+filename<- paste0(nov, '_freq_react.js')
+writeLines(jslns, filename)
+}
+
+
+
+
+```
+
+
+
+
+```{r}
+
+  jslns <- hc$x$hc_opts %>% 
+    toJSON(pretty = TRUE, auto_unbox = TRUE, force = TRUE, null = "null") %>% 
+    str_split("\n") %>% 
+    head(1) %>%
+    unlist() %>% 
+    str_replace('"', "") %>% 
+    str_replace("\":", ":")
+  
+  # function thing 
+  fflag <- str_detect(jslns, "function()")
+  if (any(fflag)) {
+    jslns <- ifelse(fflag, str_replace(jslns, "\"function", "function"), jslns)
+    jslns <- ifelse(fflag, str_replace(jslns, "\",$", ","), jslns)
+    jslns <- ifelse(fflag, str_replace(jslns, "\"$", ""), jslns)
+    jslns <- ifelse(fflag,
+                    str_replace_all(jslns,
+                                    "\\\\n",
+                                    str_c("\\\\n",
+                                          str_extract(jslns, "^\\s+")
+                                          )
+                                    ),
+                    jslns)  
+  }
+  
+  jslns <- jslns %>% 
+    # str_split("\\\\n") %>% 
+    unlist() %>% 
+    tail(-1) %>% 
+    str_c("    ", ., collapse = "\n") %>%
+    str_replace_all("\n\\s{4,}\\]\\,\n\\s{4,}\\[\n\\s{4,}", "],[") %>% 
+    sprintf("$(function () {\n  $('#container').highcharts({\n%s\n  );\n});", .)
+  
+```
+
+
+##TODO
+```{r}
+
+library(dplyr)
+
+mapdata <- get_data_from_map(download_map_data("countries/us/us-all"))
+
+set.seed(1234)
+
+data_fake <- mapdata %>% 
+  select(code = `hc-a2`) %>% 
+  mutate(value = 1e5 * abs(rt(nrow(.), df = 10)))
+
+map<- hcmap("countries/us/us-all", data = data_fake, value = "value",
+      joinBy = c("hc-a2", "code"), name = "Fake data",
+      dataLabels = list(enabled = TRUE, format = '{point.name}'),
+      borderColor = "#FAFAFA", borderWidth = 0.1,
+      tooltip = list(valueDecimals = 2, valuePrefix = "$", valueSuffix = " USD")) 
+
+
+##Map testing
+
+test<- map$x$hc_opts %>%toJSON(pretty = TRUE, auto_unbox = TRUE, force = TRUE, null = "null")
+jslns_json <- map$x$hc_opts %>% 
+  jsonlite::toJSON(pretty = TRUE, auto_unbox = TRUE, force = TRUE, null = "null")%>% 
+  str_split("\n") %>% 
+  head(1) %>%
+  unlist() %>% 
+  str_replace('"', "") %>% 
+  str_replace("\":", ":")
+write(jslns_json, 'remove.JSON')
+
+filename<- paste0( 'removeMap.js')
+writeLines(jslns, filename)
+
+
+export_hc(map, 'removeMap.js')
+saveWidget(map, 'map_remove.html')
+```
+
+
+
+-- Add  PNG code
+-- Possibly refactor ? Into helper functions 
+-- Add HTML code as well as JS exports
